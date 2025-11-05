@@ -1,77 +1,89 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Registrar domicilio</title>
-
-  <!-- Leaflet CSS (sin integrity/crossorigin) -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-
+  <meta charset="utf-8" />
+  <title>Registrar domicilio (latitud/longitud)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
   <style>
-    body { text-align:center; font-family: Arial, sans-serif; padding:10px; }
-    #map { height: 420px; width: 92%; margin: 12px auto; border:1px solid #ccc; }
-    input, button { width: 92%; padding:10px; margin:10px auto; font-size:1rem; }
-    button { cursor:pointer; }
-    #mensaje { margin-top:8px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+    h1 { font-size: 22px; text-align: center; margin-bottom: 16px; }
+    #clave { width: 100%; padding: 10px 12px; font-size: 16px; margin-bottom: 12px; }
+    #map { height: 420px; border: 1px solid #ddd; border-radius: 8px; }
+    #enviar { width: 100%; margin-top: 14px; padding: 12px; font-size: 16px; }
+    #mensaje { margin-top: 10px; min-height: 22px; text-align: center; }
   </style>
 </head>
 <body>
-  <h2>Registrar domicilio (latitud/longitud)</h2>
-  <input type="text" id="clave" placeholder="CLAVE DE TRABAJADOR" />
-  <div id="map"></div>
-  <button id="enviar">Enviar</button>
-  <p id="mensaje"></p>
+  <h1>Registrar domicilio (latitud/longitud)</h1>
 
-  <!-- Leaflet JS (sin integrity/crossorigin) -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <input id="clave" placeholder="CLAVE DE TRABAJADOR" />
+
+  <div id="map"></div>
+
+  <button id="enviar">Enviar</button>
+  <div id="mensaje"></div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin="">
+  </script>
 
   <script>
-    window.addEventListener("DOMContentLoaded", () => {
-      const msg = document.getElementById("mensaje");
+    // Mapa
+    const map = L.map("map").setView([19.4326, -99.1332], 10); // CDMX
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap contributors"
+    }).addTo(map);
 
-      // Si Leaflet no cargó, avisa y detén.
-      if (typeof L === "undefined") {
-        msg.textContent = "Error: no se pudo cargar Leaflet. Revisa tu conexión o bloqueadores.";
-        return;
-      }
+    let marker = null, last = null;
+    map.on("click", (e) => {
+      last = e.latlng;
+      if (marker) marker.setLatLng(last);
+      else marker = L.marker(last).addTo(map);
+    });
 
-      const map = L.map("map").setView([19.4326, -99.1332], 9);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "© OpenStreetMap contributors"
-      }).addTo(map);
+    const msg = document.getElementById("mensaje");
 
-      let marker = null;
-      let position = null;
+    document.getElementById("enviar").addEventListener("click", async () => {
+      msg.textContent = "";
 
-      map.on("click", (e) => {
-        position = e.latlng;
-        if (marker) marker.remove();
-        marker = L.marker(position).addTo(map);
-      });
+      const clave = document.getElementById("clave").value.trim();
+      if (!clave) { msg.textContent = "Falta CLAVE DE TRABAJADOR."; return; }
+      if (!last)  { msg.textContent = "Marca un punto en el mapa."; return; }
 
-      document.getElementById("enviar").addEventListener("click", async () => {
-        const clave = document.getElementById("clave").value.trim();
-        if (!clave || !position) {
-          msg.textContent = "Error: falta la clave o seleccionar un punto en el mapa.";
+      try {
+        const r = await fetch("/api/ubicacion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clave, lat: last.lat, lon: last.lng })
+        });
+
+        const raw = await r.text();
+        let data = {};
+        try { data = JSON.parse(raw); } catch (_) {}
+
+        if (!r.ok) {
+          const supa = data?.supabase;
+          msg.textContent = `Error: ${data?.message || r.statusText}` +
+            (supa ? ` | code=${supa.code || ""} | message=${supa.message || ""} | details=${supa.details || ""}` :
+                    ` | raw="${raw.slice(0,200)}"`);
           return;
         }
-        msg.textContent = "Enviando...";
 
-        try {
-          const r = await fetch("/api/ubicacion", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ clave, lat: position.lat, lon: position.lng })
-          });
-          const data = await r.json();
-          if (!r.ok) throw new Error(data?.message || "Error desconocido");
-          msg.textContent = "✅ Ubicación guardada correctamente.";
-        } catch (e) {
-          console.error(e);
-          msg.textContent = "Error: " + (e.message || e);
-        }
-      });
+        msg.textContent = "✅ Registro guardado";
+        document.getElementById("clave").value = "";
+        // Si quieres, limpia el marcador:
+        // map.removeLayer(marker); marker = null; last = null;
+      } catch (e) {
+        msg.textContent = "Error de red: " + (e?.message || e);
+      }
     });
   </script>
 </body>
