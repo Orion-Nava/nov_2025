@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Registro de domicilio</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  body { font-family: system-ui, Segoe UI, Roboto, Arial, sans-serif; margin: 20px; }
+  #map { height: 420px; border-radius: 8px; border: 1px solid #ddd; }
+  .row { display: grid; gap: 10px; max-width: 520px; }
+  input, button { padding: 10px; font-size: 16px; }
+  button { cursor: pointer; }
+  .hint { color:#555; font-size:14px; margin-top:4px; }
+  #msg { margin-top: 8px; font-weight: 600; }
+</style>
+
+<h2>Registrar domicilio (latitud/longitud)</h2>
+<div class="row">
+  <input id="clave" placeholder="CLAVE DE TRABAJADOR" />
+  <div id="map"></div>
+  <button id="enviar">Enviar</button>
+  <div class="hint">Da clic en el mapa para colocar el marcador. Luego presiona “Enviar”.</div>
+  <div id="msg"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const msg = document.getElementById('msg');
+  const map = L.map('map').setView([19.4326, -99.1332], 9); // CDMX aprox
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution:'© OpenStreetMap' }).addTo(map);
+
+  let last = null, marker = null;
+  map.on('click', e => {
+    last = e.latlng;
+    if (marker) marker.setLatLng(last); else marker = L.marker(last).addTo(map);
+  });
+
+  document.getElementById('enviar').onclick = async () => {
+    msg.textContent = '';
+    const clave = document.getElementById('clave').value.trim();
+    if (!clave) { msg.textContent = 'Falta CLAVE DE TRABAJADOR.'; return; }
+    if (!last)  { msg.textContent = 'Marca un punto en el mapa.'; return; }
+
+    try {
+      const r = await fetch('/api/ubicacion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clave, lat: last.lat, lon: last.lng })
+      });
+      if (r.ok) {
+        msg.textContent = 'Registro guardado ✅';
+        document.getElementById('clave').value = '';
+        // opcional: quitar marcador
+        // map.removeLayer(marker); marker = null; last = null;
+      } else {
+        const t = await r.text();
+        msg.textContent = 'Error: ' + t;
+      }
+    } catch (err) {
+      msg.textContent = 'Error de red: ' + (err?.message || err);
+    }
+  };
+</script>
+</html>
