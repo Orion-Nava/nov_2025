@@ -11,9 +11,26 @@
     crossorigin=""
   />
   <style>
-    body { text-align: center; font-family: Arial; padding: 10px; }
-    #map { height: 400px; width: 90%; margin: 0 auto; }
-    input, button { margin: 10px; padding: 10px; width: 90%; }
+    body {
+      text-align: center;
+      font-family: Arial, sans-serif;
+      padding: 10px;
+    }
+    #map {
+      height: 400px;
+      width: 90%;
+      margin: 10px auto;
+      border: 1px solid #ccc;
+    }
+    input, button {
+      margin: 10px;
+      padding: 10px;
+      width: 90%;
+      font-size: 1em;
+    }
+    button {
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -28,51 +45,60 @@
     integrity="sha256-o9N1j7kCz8+zW3v3kUuZb6NjA0jz6zO+5xR0F2jRk8A="
     crossorigin=""
   ></script>
+
   <script>
-    const map = L.map("map").setView([19.4326, -99.1332], 9);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "© OpenStreetMap contributors",
-    }).addTo(map);
-
-    let marker = null;
-    let position = null;
-
-    map.on("click", (e) => {
-      position = e.latlng;
-      if (marker) marker.remove();
-      marker = L.marker(position).addTo(map);
-    });
-
-    document.getElementById("enviar").addEventListener("click", async () => {
-      const clave = document.getElementById("clave").value.trim();
-      const mensaje = document.getElementById("mensaje");
-
-      if (!clave || !position) {
-        mensaje.textContent = "Error: Falta la clave o la ubicación.";
+    // Esperar a que el DOM cargue antes de inicializar el mapa
+    window.addEventListener("DOMContentLoaded", () => {
+      const mapElement = document.getElementById("map");
+      if (!mapElement) {
+        console.error("No se encontró el contenedor del mapa (#map)");
         return;
       }
 
-      mensaje.textContent = "Enviando...";
+      const map = L.map(mapElement).setView([19.4326, -99.1332], 9);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap contributors",
+      }).addTo(map);
 
-      try {
-        const res = await fetch("/api/ubicacion", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            clave,
-            lat: position.lat,
-            lon: position.lng,
-          }),
-        });
+      let marker = null;
+      let position = null;
 
-        const data = await res.json();
+      map.on("click", (e) => {
+        position = e.latlng;
+        if (marker) marker.remove();
+        marker = L.marker(position).addTo(map);
+      });
 
-        if (!res.ok) throw new Error(data.message || "Error desconocido");
-        mensaje.textContent = "✅ Ubicación guardada correctamente.";
-      } catch (err) {
-        mensaje.textContent = "Error: " + err.message;
-        console.error(err);
-      }
+      document.getElementById("enviar").addEventListener("click", async () => {
+        const clave = document.getElementById("clave").value.trim();
+        const mensaje = document.getElementById("mensaje");
+
+        if (!clave || !position) {
+          mensaje.textContent = "Error: Falta la clave o la ubicación.";
+          return;
+        }
+
+        mensaje.textContent = "Enviando...";
+
+        try {
+          const res = await fetch("/api/ubicacion", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              clave,
+              lat: position.lat,
+              lon: position.lng,
+            }),
+          });
+
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.message || "Error desconocido");
+          mensaje.textContent = "✅ Ubicación guardada correctamente.";
+        } catch (err) {
+          mensaje.textContent = "Error: " + err.message;
+          console.error(err);
+        }
+      });
     });
   </script>
 </body>
