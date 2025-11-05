@@ -1,89 +1,70 @@
-// api/ubicacion.js  (Node serverless en Vercel)
-const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "*";
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// api/ubicacion.js
+// Inserta en Supabase vía REST sin usar el SDK (más robusto en serverless)
 
-export default async function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+const ORIGIN = process.env.ALLOWED_ORIGIN || "*";
+const SUPABASE_URL = (process.env.SUPABASE_URL || "").trim().replace(/\/+$/, "");
+const SERVICE_KEY   = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+
+// CORS simple
+function setCors(res) {
+  res.setHeader("Access-Control-Allow-Origin", ORIGIN);
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (req.method === "OPTIONS") return res.status(200).end();
+}
 
-  if (req.method !== "POST") {
-    return res.status(405).send("Método no permitido");
-  }
+export default async function handler(req, res) {
+  setCors(res);
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST")   return res.status(405).send("Método no permitido");
 
   try {
-    // 1) Validación de envs
-    const missing = [];
-    if (!SUPABASE_URL) missing.push("SUPABASE_URL");
-    if (!SERVICE_ROLE) missing.push("SUPABASE_SERVICE_ROLE_KEY");
-    if (missing.length) {
-      return res.status(500).json({
-        message: "Variables de entorno faltantes",
-        missing,
-      });
+    if (!SUPABASE_URL || !SERVICE_KEY) {
+      return res.status(500).json({ ok:false, message:"Faltan variables de entorno SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY" });
     }
 
-    // 2) Import dinámico: evita errores de empaquetado (“module not found”)
-    let createClient;
-    try {
-      ({ createClient } = await import("@supabase/supabase-js"));
-    } catch (e) {
-      return res.status(500).json({
-        message: "No se pudo importar @supabase/supabase-js",
-        error: String(e?.message || e),
-      });
-    }
+    const { clave, lat, lon } = req.body || {};
+    if (typeof clave !== "string" || !clave.trim())
+      return res.status(400).json({ ok:false, message:"clave inválida" });
 
-    // 3) Parseo de body (puede venir string u objeto)
-    let body = req.body;
-    if (typeof body === "string") {
-      try { body = JSON.parse(body); } catch (e) {
-        return res.status(400).json({ message: "JSON inválido en body", error: String(e) });
-      }
-    }
+    const latNum = Number(lat), lonNum = Number(lon);
+    if (!Number.isFinite(latNum) || latNum < -90 || latNum > 90)
+      return res.status(400).json({ ok:false, message:"latitud inválida" });
+    if (!Number.isFinite(lonNum) || lonNum < -180 || lonNum > 180)
+      return res.status(400).json({ ok:false, message:"longitud inválida" });
 
-    const { clave, lat, lon } = body || {};
-    if (typeof clave !== "string" || clave.trim().length === 0) {
-      return res.status(400).json({ message: "clave inválida" });
-    }
-    const latNum = Number(lat);
-    const lonNum = Number(lon);
-    if (!Number.isFinite(latNum) || latNum < -90 || latNum > 90) {
-      return res.status(400).json({ message: "latitud inválida" });
-    }
-    if (!Number.isFinite(lonNum) || lonNum < -180 || lonNum > 180) {
-      return res.status(400).json({ message: "longitud inválida" });
-    }
+    const ip = (req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "").toString().slice(0,100);
+    const ua = (req.headers["user-agent"] || "").toString().slice(0,200);
 
-    const ip = req.headers["x-forwarded-for"] || req.socket?.remoteAddress || null;
-    const ua = req.headers["user-agent"] || null;
+    // Inserción directa en PostgREST
+    const url = `${SUPABASE_URL}/rest/v1/ubicaciones`;
+    const payload = [{ clave: clave.trim(), lat: latNum, lon: lonNum, ip, ua }];
 
-    // 4) Supabase client con service role
-    const supabase = createClient(SUPABASE_URL, SERVICE_ROLE);
+    const r = await fetch(url, {
+      method: "POST",
+      headers: {
+        "apikey": SERVICE_KEY,
+        "Authorization": `Bearer ${SERVICE_KEY}`,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+      },
+      body: JSON.stringify(payload)
+    });
 
-    // 5) Inserción
-    const { error } = await supabase
-      .from("ubicaciones")                 // usa 'public.ubicaciones' si tu tabla no está en search_path
-      .insert([{ clave: clave.trim(), lat: latNum, lon: lonNum, ip, ua }]);
+    const text = await r.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch { /* deja text crudo */ }
 
-    if (error) {
-      return res.status(500).json({
+    if (!r.ok) {
+      return res.status(r.status).json({
+        ok: false,
         message: "Supabase insert error",
-        supabase: {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-        },
+        supabase: typeof data === "object" ? data : { raw: text }
       });
     }
 
-    return res.status(200).json({ ok: true });
-  } catch (e) {
-    // Pase lo que pase devolvemos JSON para que el frontend lo muestre
-    return res.status(500).json({ message: "Handler error", error: String(e?.message || e) });
+    return res.status(200).json({ ok: true, row: Array.isArray(data) ? data[0] : data });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ ok:false, message:String(err?.message || err) });
   }
 }
