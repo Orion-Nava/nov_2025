@@ -12,18 +12,16 @@
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
-
-  <!-- Leaflet Control Geocoder (buscador) -->
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css"
-  />
+  <!-- Buscador -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css"/>
 
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
     h1 { font-size: 22px; text-align: center; margin-bottom: 16px; }
     #clave { width: 100%; padding: 10px 12px; font-size: 16px; margin-bottom: 12px; }
-    #map { height: 420px; border: 1px solid #ddd; border-radius: 8px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+    .toolbar > * { font-size: 14px; }
+    #map { height: 460px; border: 1px solid #ddd; border-radius: 8px; }
     #enviar { width: 100%; margin-top: 14px; padding: 12px; font-size: 16px; }
     #mensaje { margin-top: 10px; min-height: 22px; text-align: center; }
     .leaflet-control-geocoder input { font-size: 14px; }
@@ -34,57 +32,73 @@
 
   <input id="clave" placeholder="CLAVE DE TRABAJADOR" />
 
+  <div class="toolbar">
+    <button id="btnRutas" type="button">Rutas</button>
+    <!-- El control de capas (Mapa/Satélite) y el buscador aparecen dentro del mapa -->
+  </div>
+
   <div id="map"></div>
 
   <button id="enviar">Enviar</button>
   <div id="mensaje"></div>
 
-  <!-- JS de Leaflet -->
+  <!-- Leaflet -->
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin="">
   </script>
-
-  <!-- JS del buscador -->
+  <!-- Geocoder -->
   <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+  <!-- PapaParse para CSV robusto -->
+  <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
 
   <script>
     // ========================
-    // Capas base
+    // Capas base (Mapa / Satélite)
     // ========================
     const capaMapa = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap contributors"
     });
-
     const capaSatelite = L.tileLayer(
       "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
       { attribution: "© Esri, Maxar, Earthstar Geographics" }
     );
 
-    // Crear mapa con vista inicial CDMX
     const map = L.map("map", {
       center: [19.4326, -99.1332],
       zoom: 11,
-      layers: [capaMapa] // capa inicial
+      layers: [capaMapa]
     });
 
-    // Control de capas
-    const capasBase = {
-      "🗺️ Mapa": capaMapa,
-      "🛰️ Satélite": capaSatelite
-    };
+    const capasBase = { "🗺️ Mapa": capaMapa, "🛰️ Satélite": capaSatelite };
     L.control.layers(capasBase).addTo(map);
-
-    // Crédito adicional
     map.attributionControl.addAttribution("Geocoding © Nominatim");
 
     // ========================
-    // Marcador
+    // Buscador (geocoder)
+    // ========================
+    L.Control.geocoder({
+      defaultMarkGeocode: false,
+      collapsed: false,
+      placeholder: "Buscar lugar...",
+      geocodingQueryParams: { countrycodes: "mx" }
+    })
+      .on("markgeocode", function (e) {
+        const { center, name, bbox } = e.geocode;
+        if (bbox) map.fitBounds(bbox);
+        else map.flyTo(center, 16);
+        if (marker) marker.setLatLng(center);
+        else marker = L.marker(center).addTo(map);
+        last = center;
+        marker.bindPopup(name).openPopup();
+      })
+      .addTo(map);
+
+    // ========================
+    // Marcador manual
     // ========================
     let marker = null, last = null;
-
-    // Click en el mapa para colocar marcador
     map.on("click", (e) => {
       last = e.latlng;
       if (marker) marker.setLatLng(last);
@@ -92,27 +106,90 @@
     });
 
     // ========================
-    // Buscador de lugares
+    // Capa de Rutas (toggle)
     // ========================
-    const geocoder = L.Control.geocoder({
-      defaultMarkGeocode: false,
-      collapsed: false,
-      placeholder: "Buscar lugar...",
-      geocodingQueryParams: { countrycodes: "mx" }
-    })
-    .on("markgeocode", function (e) {
-      const { center, name, bbox } = e.geocode;
-      if (bbox) map.fitBounds(bbox);
-      else map.flyTo(center, 16);
-      if (marker) marker.setLatLng(center);
-      else marker = L.marker(center).addTo(map);
-      last = center;
-      marker.bindPopup(name).openPopup();
-    })
-    .addTo(map);
+    const rutasLayer = L.layerGroup(); // NO la añadimos aún
+    let rutasCargadas = false;
+    let rutasVisibles = false;
+
+    // Color consistente por nombre de ruta
+    function colorPorTexto(txt) {
+      let h = 0;
+      for (let i = 0; i < txt.length; i++) h = (h * 31 + txt.charCodeAt(i)) >>> 0;
+      return `hsl(${h % 360} 80% 45%)`;
+    }
+
+    async function cargarRutasDesdeCSV(url = "/rutas.csv") {
+      // Descarga y parseo CSV con PapaParse
+      const text = await (await fetch(url)).text();
+      const parsed = Papa.parse(text, { header: true, dynamicTyping: true, skipEmptyLines: true });
+      if (parsed.errors?.length) {
+        console.warn("Errores PapaParse:", parsed.errors);
+      }
+      const rows = parsed.data;
+
+      // Agrupar por Ruta => {ruta: [{Orden, Latitud, Longitud}, ...]}
+      const grupos = new Map();
+      for (const r of rows) {
+        const Ruta = String(r.Ruta ?? "").trim();
+        const Orden = Number(r.Orden);
+        const Lat = Number(r.Latitud);
+        const Lon = Number(r.Longitud);
+        if (!Ruta || Number.isNaN(Orden) || Number.isNaN(Lat) || Number.isNaN(Lon)) continue;
+        if (!grupos.has(Ruta)) grupos.set(Ruta, []);
+        grupos.get(Ruta).push({ Orden, Lat, Lon });
+      }
+
+      // Para cada ruta: ordenar por Orden, crear polyline y (opcional) puntos
+      grupos.forEach((pts, ruta) => {
+        pts.sort((a, b) => a.Orden - b.Orden);
+        const latlngs = pts.map(p => [p.Lat, p.Lon]);
+
+        const color = colorPorTexto(ruta);
+
+        const pl = L.polyline(latlngs, { color, weight: 3, opacity: 0.9 });
+        pl.bindTooltip(`Ruta: ${ruta}`, { sticky: true });
+        pl.addTo(rutasLayer);
+
+        // Puntos discretos (círculos pequeños), opcional
+        pts.forEach(p => {
+          const c = L.circleMarker([p.Lat, p.Lon], {
+            radius: 3.5, color, weight: 1, fillOpacity: 0.8
+          }).bindTooltip(`Ruta: ${ruta} • Orden: ${p.Orden}`, { sticky: true });
+          c.addTo(rutasLayer);
+        });
+      });
+
+      rutasCargadas = true;
+    }
+
+    async function toggleRutas() {
+      if (!rutasVisibles) {
+        // Encender
+        if (!rutasCargadas) {
+          try {
+            await cargarRutasDesdeCSV("/rutas.csv"); // cambia la ruta si el archivo se llama distinto
+          } catch (e) {
+            alert("No se pudieron cargar las rutas: " + (e?.message || e));
+            return;
+          }
+        }
+        rutasLayer.addTo(map);
+        rutasVisibles = true;
+        btnRutas.textContent = "Rutas (ocultar)";
+      } else {
+        // Apagar
+        rutasLayer.removeFrom(map);
+        rutasVisibles = false;
+        btnRutas.textContent = "Rutas";
+      }
+    }
+
+    const btnRutas = document.getElementById("btnRutas");
+    btnRutas.addEventListener("click", toggleRutas);
 
     // ========================
-    // Envío de datos
+    // Envío de datos a tu API
     // ========================
     const msg = document.getElementById("mensaje");
 
