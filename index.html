@@ -84,4 +84,228 @@
       attribution: "© OpenStreetMap contributors"
     });
     const capaSatelite = L.tileLayer(
-      "https://server.arcgisonline.com/ArcGIS/rest/services/W
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { attribution: "© Esri, Maxar, Earthstar Geographics" }
+    );
+
+    const map = L.map("map", {
+      center: [19.4326, -99.1332], // CDMX
+      zoom: 11,
+      layers: [capaMapa]
+    });
+
+    const capasBase = { "🗺️ Mapa": capaMapa, "🛰️ Satélite": capaSatelite };
+    L.control.layers(capasBase).addTo(map);
+    map.attributionControl.addAttribution("Geocoding © Nominatim");
+
+    // ========================
+    // Buscador (geocoder)
+    // ========================
+    L.Control.geocoder({
+      defaultMarkGeocode: false,
+      collapsed: false,
+      placeholder: "Buscar lugar...",
+      geocodingQueryParams: { countrycodes: "mx" }
+    })
+    .on("markgeocode", function (e) {
+      const { center, name, bbox } = e.geocode;
+      if (bbox) map.fitBounds(bbox);
+      else map.flyTo(center, 16);
+      if (marker) marker.setLatLng(center);
+      else marker = L.marker(center).addTo(map);
+      last = center;
+      marker.bindPopup(name).openPopup();
+    })
+    .addTo(map);
+
+    // ========================
+    // Marcador manual
+    // ========================
+    let marker = null, last = null;
+    map.on("click", (e) => {
+      last = e.latlng;
+      if (marker) marker.setLatLng(last);
+      else marker = L.marker(last).addTo(map);
+    });
+
+    // ========================
+    // Rutas desde CSV
+    // ========================
+    const rutasLayer = L.layerGroup();
+    let rutasCargadas = false;
+    let rutasVisibles = false;
+
+    // Map<string, {latlngs: [lat,lon][], polyline: L.Polyline}>
+    const rutasIndex = new Map();
+
+    function colorPorTexto(txt) {
+      let h = 0;
+      for (let i = 0; i < txt.length; i++) h = (h * 31 + txt.charCodeAt(i)) >>> 0;
+      return `hsl(${h % 360} 80% 45%)`;
+    }
+
+    function poblarSelectRutas() {
+      const sel = document.getElementById("ruta");
+      // limpiar, conservar primera opción
+      sel.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
+
+      const nombres = Array.from(rutasIndex.keys()).sort((a,b)=>a.localeCompare(b,'es'));
+      for (const nombre of nombres) {
+        const opt = document.createElement("option");
+        opt.value = nombre;
+        opt.textContent = nombre;
+        sel.appendChild(opt);
+      }
+    }
+
+    async function cargarRutasDesdeCSV(url = "rutas.csv") {
+      // Lee el CSV que está al mismo nivel que index.html (ruta RELATIVA)
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} al leer ${url}`);
+      const text = await resp.text();
+
+      const parsed = Papa.parse(text, { header: true, dynamicTyping: true, skipEmptyLines: true });
+      const rows = parsed.data;
+
+      // Agrupar por Ruta
+      const grupos = new Map();
+      for (const r of rows) {
+        const Ruta = String(r.Ruta ?? "").trim();
+        const Orden = Number(r.Orden);
+        const Lat = Number(r.Latitud);
+        const Lon = Number(r.Longitud);
+        if (!Ruta || Number.isNaN(Orden) || Number.isNaN(Lat) || Number.isNaN(Lon)) continue;
+        if (!grupos.has(Ruta)) grupos.set(Ruta, []);
+        grupos.get(Ruta).push({ Orden, Lat, Lon });
+      }
+
+      // Crear solo polilíneas (SIN puntos)
+      rutasLayer.clearLayers();
+      rutasIndex.clear();
+
+      grupos.forEach((pts, ruta) => {
+        pts.sort((a, b) => a.Orden - b.Orden);
+        const latlngs = pts.map(p => [p.Lat, p.Lon]);
+        const color = colorPorTexto(ruta);
+
+        const pl = L.polyline(latlngs, { color, weight: 3, opacity: 0.9 })
+          .bindTooltip(`Ruta: ${ruta}`, { sticky: true });
+        pl.addTo(rutasLayer);
+
+        rutasIndex.set(ruta, { latlngs, polyline: pl });
+      });
+
+      rutasCargadas = true;
+      poblarSelectRutas();
+    }
+
+    async function toggleRutas() {
+      if (!rutasVisibles) {
+        if (!rutasCargadas) {
+          try {
+            await cargarRutasDesdeCSV("rutas.csv"); // ¡ruta relativa!
+          } catch (e) {
+            alert("No se pudieron cargar las rutas: " + (e?.message || e));
+            return;
+          }
+        }
+        rutasLayer.addTo(map);
+        rutasVisibles = true;
+        btnRutas.textContent = "Rutas (ocultar)";
+      } else {
+        rutasLayer.removeFrom(map);
+        rutasVisibles = false;
+        btnRutas.textContent = "Rutas";
+      }
+    }
+
+    const btnRutas = document.getElementById("btnRutas");
+    btnRutas.addEventListener("click", toggleRutas);
+
+    // Acercar el mapa cuando se elige una ruta
+    const selRuta = document.getElementById("ruta");
+    const rutaInfo = document.getElementById("rutaInfo");
+    selRuta.addEventListener("change", () => {
+      const name = selRuta.value;
+      rutaInfo.textContent = "";
+      if (!name || !rutasIndex.has(name)) return;
+      const { polyline } = rutasIndex.get(name);
+      try { map.fitBounds(polyline.getBounds(), { padding: [20,20] }); } catch {}
+    });
+
+    // ========================
+    // Util: distancia punto - polilínea (km) con Turf
+    // ========================
+    function distanciaPuntoARutaKm(lat, lon, latlngsRuta) {
+      // latlngsRuta: [[lat, lon], ...]
+      if (!latlngsRuta || latlngsRuta.length < 2) return null;
+      const pt = turf.point([lon, lat]);
+      const line = turf.lineString(latlngsRuta.map(([la, lo]) => [lo, la]));
+      const d = turf.pointToLineDistance(pt, line, { units: 'kilometers' });
+      return (Number.isFinite(d) ? d : null);
+    }
+
+    // ========================
+    // Envío de datos a /api/ubicacion
+    // ========================
+    const msg = document.getElementById("mensaje");
+
+    document.getElementById("enviar").addEventListener("click", async () => {
+      msg.textContent = "";
+
+      const clave = document.getElementById("clave").value.trim();
+      const rutaSel = selRuta.value;
+      if (!clave) { msg.textContent = "Falta CLAVE DE TRABAJADOR."; return; }
+      if (!rutaSel) { msg.textContent = "Selecciona una RUTA."; return; }
+      if (!last)  { msg.textContent = "Marca un punto en el mapa."; return; }
+
+      // Asegurar que tenemos las rutas cargadas (para calcular distancia)
+      if (!rutasCargadas) {
+        try { await cargarRutasDesdeCSV("rutas.csv"); }
+        catch (e) { msg.textContent = "No se pudieron cargar rutas para calcular distancia."; return; }
+      }
+      const rutaObj = rutasIndex.get(rutaSel);
+      if (!rutaObj) { msg.textContent = "Ruta seleccionada no encontrada en CSV."; return; }
+
+      const distanciaKm = distanciaPuntoARutaKm(last.lat, last.lng, rutaObj.latlngs);
+      if (distanciaKm == null) {
+        msg.textContent = "No se pudo calcular distancia a la ruta.";
+        return;
+      }
+
+      try {
+        const r = await fetch("/api/ubicacion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            clave,
+            ruta: rutaSel,
+            lat: last.lat,
+            lon: last.lng,
+            distancia_a_ruta: distanciaKm
+          })
+        });
+
+        const raw = await r.text();
+        let data = {};
+        try { data = JSON.parse(raw); } catch (_) {}
+
+        if (!r.ok) {
+          const supa = data?.supabase;
+          msg.textContent = `Error: ${data?.message || r.statusText}` +
+            (supa ? ` | code=${supa.code || ""} | message=${supa.message || ""} | details=${supa.details || ""}` :
+                    ` | raw="${raw.slice(0,200)}"`);
+          return;
+        }
+
+        msg.textContent = `✅ Registro guardado (distancia a ruta: ${distanciaKm.toFixed(3)} km)`;
+        document.getElementById("clave").value = "";
+        // Opcional: limpiar marcador
+        // if (marker) { map.removeLayer(marker); marker = null; last = null; }
+      } catch (e) {
+        msg.textContent = "Error de red: " + (e?.message || e);
+      }
+    });
+  </script>
+</body>
+</html>
