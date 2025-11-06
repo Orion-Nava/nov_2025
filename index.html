@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <title>Registrar domicilio (latitud/longitud)</title>
+  <title>Registro de domicilio</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <!-- Leaflet -->
@@ -20,26 +20,57 @@
 
   <style>
     :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
-    h1 { font-size: 22px; text-align: center; margin-bottom: 16px; }
+    /* Header con logo + título */
+    .header { display:flex; align-items:center; gap:12px; justify-content:center; margin-bottom: 12px; }
+    .header img { height: 38px; width:auto; object-fit: contain; }
+    .header h1 { font-size: 22px; margin: 0; }
+
     .grid { display: grid; grid-template-columns: 1fr; gap: 10px; margin-bottom: 12px; }
     label { font-size: 14px; font-weight: 600; }
     input, select { width: 100%; padding: 10px 12px; font-size: 16px; }
-    .toolbar { display: flex; gap: 8px; align-items: center; margin: 8px 0 12px; flex-wrap: wrap; }
-    .toolbar button { padding: 8px 10px; font-size: 14px; cursor: pointer; }
-    #map { height: 460px; border: 1px solid #ddd; border-radius: 8px; }
-    #enviar { width: 100%; margin-top: 14px; padding: 12px; font-size: 16px; }
-    #mensaje { margin-top: 10px; min-height: 22px; text-align: center; }
-    .leaflet-control-geocoder input { font-size: 14px; }
+
     .row { display:flex; gap:10px; flex-wrap:wrap; }
     .row > * { flex:1 1 280px; }
+
     .muted { font-size: 12px; opacity: .8; }
     .panel { margin-top:8px; font-size:14px; line-height:1.35; }
     .panel strong { font-weight:700; }
+
+    /* Mapa 20% más alto (460px -> 552px) */
+    #map { height: 552px; border: 1px solid #ddd; border-radius: 8px; }
+
+    /* Barra de acciones abajo (Rutas + Enviar) */
+    .actions { display:flex; gap:10px; align-items:center; margin: 12px 0 10px; }
+    .actions button { flex:1 1 0; padding: 12px; font-size: 16px; cursor: pointer; border: none; border-radius: 8px; }
+
+    /* Botones */
+    #btnRutas { background: #e5e7eb; color:#111827; }
+    #btnRutas:hover { filter: brightness(0.97); }
+
+    /* ENVIAR: amarillo (pendiente) -> verde (éxito) */
+    #enviar { background: #f5d90a; color:#111; }
+    #enviar.success { background: #16a34a; color: #fff; }
+
+    /* Mensajes con icono a la izquierda */
+    #mensaje { margin-top: 6px; min-height: 26px; text-align: left; display:flex; align-items:center; gap:8px; justify-content:center; padding: 8px 12px; border-radius: 8px; font-size: 14px; }
+    #mensaje.hidden { display:none; }
+    #mensaje.msg-error { color:#991b1b; background:#fee2e2; border:1px solid #fecaca; }
+    #mensaje.msg-success { color:#065f46; background:#d1fae5; border:1px solid #a7f3d0; }
+    #mensaje.msg-error::before { content: "✖"; color:#dc2626; font-weight:700; }
+    #mensaje.msg-success::before { content: "✔"; color:#16a34a; font-weight:700; }
+
+    /* Geocoder input un poco más legible */
+    .leaflet-control-geocoder input { font-size: 14px; }
   </style>
 </head>
 <body>
-  <h1>Registrar domicilio (latitud/longitud)</h1>
+  <!-- Encabezado con logo -->
+  <div class="header">
+    <img src="logo_inix.png" alt="INIX Nutrigo" />
+    <h1>Registro de domicilio</h1>
+  </div>
 
   <div class="grid">
     <div class="row">
@@ -51,39 +82,43 @@
         <label for="ruta">RUTA</label>
         <select id="ruta">
           <option value="">— Selecciona una ruta —</option>
-          <!-- Se llenará al leer rutas.csv -->
         </select>
         <div class="muted" id="rutaInfo"></div>
       </div>
     </div>
-    <!-- NUEVO: panel con la ruta y la distancia calculada -->
+
+    <!-- Panel con la ruta y la distancia calculada -->
     <div class="panel">
       <div><strong>Ruta seleccionada:</strong> <span id="rutaSelLbl">—</span></div>
       <div><strong>Distancia mínima (Ruta-Domicilio):</strong> <span id="distLbl">—</span></div>
     </div>
   </div>
 
-  <div class="toolbar">
-    <button id="btnRutas" type="button">Rutas</button>
-    <!-- (El control de capas y el buscador aparecen dentro del mapa) -->
-  </div>
-
   <div id="map"></div>
 
-  <button id="enviar">Enviar</button>
-  <div id="mensaje"></div>
+  <!-- Acciones abajo, juntos -->
+  <div class="actions">
+    <button id="btnRutas" type="button">Rutas</button>
+    <button id="enviar" type="button">Enviar</button>
+  </div>
+
+  <div id="mensaje" class="hidden"></div>
 
   <!-- JS: Leaflet, Geocoder, PapaParse, Turf -->
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin="">
-  </script>
+    crossorigin=""></script>
   <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
   <script src="https://unpkg.com/papaparse@5.4.1/papaparse.min.js"></script>
   <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 
   <script>
+    // ========================
+    // Parámetros
+    // ========================
+    const INIX = [19.550692592073744, -99.75661108387561];
+
     // ========================
     // Capas base (Mapa / Satélite)
     // ========================
@@ -96,14 +131,20 @@
     );
 
     const map = L.map("map", {
-      center: [19.4326, -99.1332], // CDMX
-      zoom: 11,
+      center: INIX,
+      zoom: 12,
       layers: [capaMapa]
     });
 
     const capasBase = { "🗺️ Mapa": capaMapa, "🛰️ Satélite": capaSatelite };
     L.control.layers(capasBase).addTo(map);
     map.attributionControl.addAttribution("Geocoding © Nominatim");
+
+    // Punto INIX (negro, grueso) con etiqueta abajo
+    const inixMarker = L.circleMarker(INIX, {
+      radius: 7, color: "#000", weight: 2, fillColor: "#000", fillOpacity: 1
+    }).addTo(map);
+    inixMarker.bindTooltip("INIX Nutrigo", { permanent: true, direction: "bottom", offset: [0, 6] });
 
     // ========================
     // Buscador (geocoder)
@@ -123,11 +164,12 @@
       last = center;
       marker.bindPopup(name).openPopup();
       actualizarPanel();
+      resetEnviar();
     })
     .addTo(map);
 
     // ========================
-    // Marcador manual
+    // Marcador manual (usuario)
     // ========================
     let marker = null, last = null;
     map.on("click", (e) => {
@@ -135,6 +177,7 @@
       if (marker) marker.setLatLng(last);
       else marker = L.marker(last).addTo(map);
       actualizarPanel();
+      resetEnviar();
     });
 
     // ========================
@@ -155,9 +198,7 @@
 
     function poblarSelectRutas() {
       const sel = document.getElementById("ruta");
-      // limpiar, conservar primera opción
       sel.querySelectorAll("option:not(:first-child)").forEach(o => o.remove());
-
       const nombres = Array.from(rutasIndex.keys()).sort((a,b)=>a.localeCompare(b,'es'));
       for (const nombre of nombres) {
         const opt = document.createElement("option");
@@ -236,6 +277,7 @@
     const rutaInfo = document.getElementById("rutaInfo");
     const rutaSelLbl = document.getElementById("rutaSelLbl");
     const distLbl = document.getElementById("distLbl");
+    const btnEnviar = document.getElementById("enviar");
 
     selRuta.addEventListener("change", () => {
       const name = selRuta.value;
@@ -246,6 +288,7 @@
         try { map.fitBounds(polyline.getBounds(), { padding: [20,20] }); } catch {}
       }
       actualizarPanel();
+      resetEnviar();
     });
 
     // ========================
@@ -278,31 +321,57 @@
     }
 
     // ========================
-    // Envío de datos a /api/ubicacion
+    // Mensajes bonitos
     // ========================
     const msg = document.getElementById("mensaje");
-
-    document.getElementById("enviar").addEventListener("click", async () => {
+    function showError(texto) {
+      msg.className = "msg-error";
+      msg.textContent = texto;
+    }
+    function showSuccess(texto) {
+      msg.className = "msg-success";
+      msg.textContent = texto;
+    }
+    function hideMsg() {
+      msg.className = "hidden";
       msg.textContent = "";
+    }
+
+    // Reset de botón ENVIAR (vuelve a amarillo)
+    function resetEnviar() {
+      btnEnviar.classList.remove('success');
+    }
+    // Cambiar a verde tras éxito
+    function markEnviarSuccess() {
+      btnEnviar.classList.add('success');
+    }
+    // Cuando el usuario edite clave, reset
+    document.getElementById('clave').addEventListener('input', () => { hideMsg(); resetEnviar(); });
+
+    // ========================
+    // Envío de datos a /api/ubicacion
+    // ========================
+    document.getElementById("enviar").addEventListener("click", async () => {
+      hideMsg();
 
       const clave = document.getElementById("clave").value.trim();
       const rutaSel = selRuta.value;
-      if (!clave) { msg.textContent = "Falta CLAVE DE TRABAJADOR."; return; }
-      if (!rutaSel) { msg.textContent = "Selecciona una RUTA."; return; }
-      if (!last)  { msg.textContent = "Marca un punto en el mapa."; return; }
 
-      // Asegurar rutas cargadas para evitar null en primera carga
+      if (!clave) { showError("Escriba su clave de trabajador"); return; }
+      if (!rutaSel) { showError("Seleccione una ruta"); return; }
+      if (!last)  { showError("Marque su domicilio en el mapa"); return; }
+
+      // Asegurar rutas cargadas
       if (!rutasCargadas) {
         try { await cargarRutasDesdeCSV("rutas.csv"); }
-        catch (e) { msg.textContent = "No se pudieron cargar rutas para calcular distancia."; return; }
+        catch (e) { showError("No se pudieron cargar rutas para calcular distancia."); return; }
       }
 
-      // Si por alguna razón no se actualizó el panel, calcúlala aquí
       if (distanciaKmActual == null) {
         const obj = rutasIndex.get(rutaSel);
-        if (!obj) { msg.textContent = "Ruta seleccionada no encontrada en CSV."; return; }
+        if (!obj) { showError("Ruta seleccionada no encontrada en CSV."); return; }
         distanciaKmActual = distanciaPuntoARutaKm(last.lat, last.lng, obj.latlngs);
-        if (distanciaKmActual == null) { msg.textContent = "No se pudo calcular distancia a la ruta."; return; }
+        if (distanciaKmActual == null) { showError("No se pudo calcular distancia a la ruta."); return; }
       }
 
       try {
@@ -324,18 +393,23 @@
 
         if (!r.ok) {
           const supa = data?.supabase;
-          msg.textContent = `Error: ${data?.message || r.statusText}` +
-            (supa ? ` | code=${supa.code || ""} | message=${supa.message || ""} | details=${supa.details || ""}` :
-                    ` | raw="${raw.slice(0,200)}"`);
+          showError(`Error: ${data?.message || r.statusText}` +
+            (supa ? ` | code=${supa.code || ""} | message=${supa.message || ""}` :
+                    ``));
           return;
         }
 
-        msg.textContent = `✅ Registro guardado (distancia a ruta: ${distanciaKmActual.toFixed(3)} km)`;
+        // Éxito: palomita y botón verde
+        showSuccess("Registro guardado");
+        markEnviarSuccess();
         document.getElementById("clave").value = "";
       } catch (e) {
-        msg.textContent = "Error de red: " + (e?.message || e);
+        showError("Error de red: " + (e?.message || e));
       }
     });
+
+    // Agrega el layer de rutas al mapa al inicio para que el toggle funcione al primer click
+    rutasLayer.addTo(map);
   </script>
 </body>
 </html>
