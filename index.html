@@ -34,6 +34,8 @@
     .row { display:flex; gap:10px; flex-wrap:wrap; }
     .row > * { flex:1 1 280px; }
     .muted { font-size: 12px; opacity: .8; }
+    .panel { margin-top:8px; font-size:14px; line-height:1.35; }
+    .panel strong { font-weight:700; }
   </style>
 </head>
 <body>
@@ -53,6 +55,11 @@
         </select>
         <div class="muted" id="rutaInfo"></div>
       </div>
+    </div>
+    <!-- NUEVO: panel con la ruta y la distancia calculada -->
+    <div class="panel">
+      <div><strong>Ruta seleccionada:</strong> <span id="rutaSelLbl">—</span></div>
+      <div><strong>Distancia mínima (Ruta-Domicilio):</strong> <span id="distLbl">—</span></div>
     </div>
   </div>
 
@@ -115,6 +122,7 @@
       else marker = L.marker(center).addTo(map);
       last = center;
       marker.bindPopup(name).openPopup();
+      actualizarPanel();
     })
     .addTo(map);
 
@@ -126,6 +134,7 @@
       last = e.latlng;
       if (marker) marker.setLatLng(last);
       else marker = L.marker(last).addTo(map);
+      actualizarPanel();
     });
 
     // ========================
@@ -159,7 +168,6 @@
     }
 
     async function cargarRutasDesdeCSV(url = "rutas.csv") {
-      // Lee el CSV que está al mismo nivel que index.html (ruta RELATIVA)
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`HTTP ${resp.status} al leer ${url}`);
       const text = await resp.text();
@@ -197,13 +205,14 @@
 
       rutasCargadas = true;
       poblarSelectRutas();
+      actualizarPanel(); // por si ya hay pin puesto y ruta elegida
     }
 
     async function toggleRutas() {
       if (!rutasVisibles) {
         if (!rutasCargadas) {
           try {
-            await cargarRutasDesdeCSV("rutas.csv"); // ¡ruta relativa!
+            await cargarRutasDesdeCSV("rutas.csv"); // ruta relativa
           } catch (e) {
             alert("No se pudieron cargar las rutas: " + (e?.message || e));
             return;
@@ -222,27 +231,50 @@
     const btnRutas = document.getElementById("btnRutas");
     btnRutas.addEventListener("click", toggleRutas);
 
-    // Acercar el mapa cuando se elige una ruta
+    // Acercar y actualizar panel cuando se elige una ruta
     const selRuta = document.getElementById("ruta");
     const rutaInfo = document.getElementById("rutaInfo");
+    const rutaSelLbl = document.getElementById("rutaSelLbl");
+    const distLbl = document.getElementById("distLbl");
+
     selRuta.addEventListener("change", () => {
       const name = selRuta.value;
+      rutaSelLbl.textContent = name || "—";
       rutaInfo.textContent = "";
-      if (!name || !rutasIndex.has(name)) return;
-      const { polyline } = rutasIndex.get(name);
-      try { map.fitBounds(polyline.getBounds(), { padding: [20,20] }); } catch {}
+      if (name && rutasIndex.has(name)) {
+        const { polyline } = rutasIndex.get(name);
+        try { map.fitBounds(polyline.getBounds(), { padding: [20,20] }); } catch {}
+      }
+      actualizarPanel();
     });
 
     // ========================
     // Util: distancia punto - polilínea (km) con Turf
     // ========================
     function distanciaPuntoARutaKm(lat, lon, latlngsRuta) {
-      // latlngsRuta: [[lat, lon], ...]
       if (!latlngsRuta || latlngsRuta.length < 2) return null;
       const pt = turf.point([lon, lat]);
       const line = turf.lineString(latlngsRuta.map(([la, lo]) => [lo, la]));
       const d = turf.pointToLineDistance(pt, line, { units: 'kilometers' });
       return (Number.isFinite(d) ? d : null);
+    }
+
+    // Estado para reutilizar el valor en el submit
+    let distanciaKmActual = null;
+
+    function actualizarPanel() {
+      const name = selRuta.value;
+      rutaSelLbl.textContent = name || "—";
+
+      if (!name || !rutasIndex.has(name) || !last) {
+        distanciaKmActual = null;
+        distLbl.textContent = "—";
+        return;
+      }
+      const { latlngs } = rutasIndex.get(name);
+      const d = distanciaPuntoARutaKm(last.lat, last.lng, latlngs);
+      distanciaKmActual = d;
+      distLbl.textContent = (d == null) ? "—" : `${d.toFixed(3)} km`;
     }
 
     // ========================
@@ -259,18 +291,18 @@
       if (!rutaSel) { msg.textContent = "Selecciona una RUTA."; return; }
       if (!last)  { msg.textContent = "Marca un punto en el mapa."; return; }
 
-      // Asegurar que tenemos las rutas cargadas (para calcular distancia)
+      // Asegurar rutas cargadas para evitar null en primera carga
       if (!rutasCargadas) {
         try { await cargarRutasDesdeCSV("rutas.csv"); }
         catch (e) { msg.textContent = "No se pudieron cargar rutas para calcular distancia."; return; }
       }
-      const rutaObj = rutasIndex.get(rutaSel);
-      if (!rutaObj) { msg.textContent = "Ruta seleccionada no encontrada en CSV."; return; }
 
-      const distanciaKm = distanciaPuntoARutaKm(last.lat, last.lng, rutaObj.latlngs);
-      if (distanciaKm == null) {
-        msg.textContent = "No se pudo calcular distancia a la ruta.";
-        return;
+      // Si por alguna razón no se actualizó el panel, calcúlala aquí
+      if (distanciaKmActual == null) {
+        const obj = rutasIndex.get(rutaSel);
+        if (!obj) { msg.textContent = "Ruta seleccionada no encontrada en CSV."; return; }
+        distanciaKmActual = distanciaPuntoARutaKm(last.lat, last.lng, obj.latlngs);
+        if (distanciaKmActual == null) { msg.textContent = "No se pudo calcular distancia a la ruta."; return; }
       }
 
       try {
@@ -282,7 +314,7 @@
             ruta: rutaSel,
             lat: last.lat,
             lon: last.lng,
-            distancia_a_ruta: distanciaKm
+            distancia_a_ruta: distanciaKmActual
           })
         });
 
@@ -298,10 +330,8 @@
           return;
         }
 
-        msg.textContent = `✅ Registro guardado (distancia a ruta: ${distanciaKm.toFixed(3)} km)`;
+        msg.textContent = `✅ Registro guardado (distancia a ruta: ${distanciaKmActual.toFixed(3)} km)`;
         document.getElementById("clave").value = "";
-        // Opcional: limpiar marcador
-        // if (marker) { map.removeLayer(marker); marker = null; last = null; }
       } catch (e) {
         msg.textContent = "Error de red: " + (e?.message || e);
       }
