@@ -55,6 +55,11 @@
 
   <script>
     // ========================
+    // Config
+    // ========================
+    const CSV_URL = '/rutas.csv';   // tu archivo está en /public → se sirve como /rutas.csv
+
+    // ========================
     // Capas base (Mapa / Satélite)
     // ========================
     const capaMapa = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -111,6 +116,7 @@
     const rutasLayer = L.layerGroup(); // NO la añadimos aún
     let rutasCargadas = false;
     let rutasVisibles = false;
+    let rutasBounds = null; // mejora: para hacer fitBounds al encender por primera vez
 
     // Color consistente por nombre de ruta
     function colorPorTexto(txt) {
@@ -119,7 +125,7 @@
       return `hsl(${h % 360} 80% 45%)`;
     }
 
-    async function cargarRutasDesdeCSV(url = "/rutas.csv") {
+    async function cargarRutasDesdeCSV(url = CSV_URL) {
       // Descarga y parseo CSV con PapaParse
       const text = await (await fetch(url)).text();
       const parsed = Papa.parse(text, { header: true, dynamicTyping: true, skipEmptyLines: true });
@@ -141,9 +147,11 @@
       }
 
       // Para cada ruta: ordenar por Orden, crear polyline y (opcional) puntos
+      let allLatLngs = [];
       grupos.forEach((pts, ruta) => {
         pts.sort((a, b) => a.Orden - b.Orden);
         const latlngs = pts.map(p => [p.Lat, p.Lon]);
+        allLatLngs = allLatLngs.concat(latlngs);
 
         const color = colorPorTexto(ruta);
 
@@ -153,13 +161,15 @@
 
         // Puntos discretos (círculos pequeños), opcional
         pts.forEach(p => {
-          const c = L.circleMarker([p.Lat, p.Lon], {
+          L.circleMarker([p.Lat, p.Lon], {
             radius: 3.5, color, weight: 1, fillOpacity: 0.8
-          }).bindTooltip(`Ruta: ${ruta} • Orden: ${p.Orden}`, { sticky: true });
-          c.addTo(rutasLayer);
+          })
+          .bindTooltip(`Ruta: ${ruta} • Orden: ${p.Orden}`, { sticky: true })
+          .addTo(rutasLayer);
         });
       });
 
+      if (allLatLngs.length) rutasBounds = L.latLngBounds(allLatLngs);
       rutasCargadas = true;
     }
 
@@ -168,7 +178,7 @@
         // Encender
         if (!rutasCargadas) {
           try {
-            await cargarRutasDesdeCSV("/rutas.csv"); // cambia la ruta si el archivo se llama distinto
+            await cargarRutasDesdeCSV(CSV_URL);
           } catch (e) {
             alert("No se pudieron cargar las rutas: " + (e?.message || e));
             return;
@@ -177,6 +187,7 @@
         rutasLayer.addTo(map);
         rutasVisibles = true;
         btnRutas.textContent = "Rutas (ocultar)";
+        if (rutasBounds) map.fitBounds(rutasBounds.pad(0.05)); // mejora: auto-zoom
       } else {
         // Apagar
         rutasLayer.removeFrom(map);
