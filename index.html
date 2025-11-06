@@ -22,6 +22,7 @@
     :root { color-scheme: light dark; }
     * { box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
+
     /* Header con logo + título */
     .header { display:flex; align-items:center; gap:12px; justify-content:center; margin-bottom: 12px; }
     .header img { height: 38px; width:auto; object-fit: contain; }
@@ -38,20 +39,24 @@
     .panel { margin-top:8px; font-size:14px; line-height:1.35; }
     .panel strong { font-weight:700; }
 
-    /* Mapa 20% más alto (460px -> 552px) */
+    /* Mapa (20% más alto) */
     #map { height: 552px; border: 1px solid #ddd; border-radius: 8px; }
 
-    /* Barra de acciones abajo (Rutas + Enviar) */
+    /* Acciones abajo (Rutas + Enviar) */
     .actions { display:flex; gap:10px; align-items:center; margin: 12px 0 10px; }
-    .actions button { flex:1 1 0; padding: 12px; font-size: 16px; cursor: pointer; border: none; border-radius: 8px; }
-
-    /* Botones */
-    #btnRutas { background: #e5e7eb; color:#111827; }
-    #btnRutas:hover { filter: brightness(0.97); }
-
-    /* ENVIAR: amarillo (pendiente) -> verde (éxito) */
-    #enviar { background: #f5d90a; color:#111; }
-    #enviar.success { background: #16a34a; color: #fff; }
+    .actions button {
+      flex:1 1 0;
+      padding: 12px;
+      font-size: 16px;
+      cursor: pointer;
+      border-radius: 8px;
+      border: 1px solid #c9c9c9;     /* “normal”, sin colorear */
+      background: buttonface;         /* estilo del sistema */
+      color: buttontext;
+    }
+    /* Estados de color cuando correspondan */
+    .btn-yellow { background: #f5d90a !important; color:#111 !important; }
+    .btn-green  { background: #16a34a !important; color:#fff !important; }
 
     /* Mensajes con icono a la izquierda */
     #mensaje { margin-top: 6px; min-height: 26px; text-align: left; display:flex; align-items:center; gap:8px; justify-content:center; padding: 8px 12px; border-radius: 8px; font-size: 14px; }
@@ -61,14 +66,19 @@
     #mensaje.msg-error::before { content: "✖"; color:#dc2626; font-weight:700; }
     #mensaje.msg-success::before { content: "✔"; color:#16a34a; font-weight:700; }
 
-    /* Geocoder input un poco más legible */
+    /* Tooltip pequeño para INIX */
+    .inix-tooltip {
+      font-size: 12px;          /* más chico que el default */
+      padding: 2px 6px;
+    }
+
     .leaflet-control-geocoder input { font-size: 14px; }
   </style>
 </head>
 <body>
   <!-- Encabezado con logo -->
   <div class="header">
-    <img src="logo_inix.png" alt="INIX Nutrigo" />
+    <img src="logo_inix.png" alt="INIX" />
     <h1>Registro de domicilio</h1>
   </div>
 
@@ -140,11 +150,18 @@
     L.control.layers(capasBase).addTo(map);
     map.attributionControl.addAttribution("Geocoding © Nominatim");
 
-    // Punto INIX (negro, grueso) con etiqueta abajo
+    // Punto INIX (negro, más chico) con tooltip pequeño "INIX"
     const inixMarker = L.circleMarker(INIX, {
-      radius: 7, color: "#000", weight: 2, fillColor: "#000", fillOpacity: 1
+      radius: 5,                     // <-- más chico
+      color: "#000", weight: 2,
+      fillColor: "#000", fillOpacity: 1
     }).addTo(map);
-    inixMarker.bindTooltip("INIX Nutrigo", { permanent: true, direction: "bottom", offset: [0, 6] });
+    inixMarker.bindTooltip("INIX", {
+      permanent: true,
+      direction: "bottom",
+      offset: [0, 6],
+      className: "inix-tooltip"      // <-- texto más chico
+    });
 
     // ========================
     // Buscador (geocoder)
@@ -249,23 +266,22 @@
       actualizarPanel(); // por si ya hay pin puesto y ruta elegida
     }
 
-    async function toggleRutas() {
+    function toggleRutas() {
       if (!rutasVisibles) {
         if (!rutasCargadas) {
-          try {
-            await cargarRutasDesdeCSV("rutas.csv"); // ruta relativa
-          } catch (e) {
+          cargarRutasDesdeCSV("rutas.csv").catch(e => {
             alert("No se pudieron cargar las rutas: " + (e?.message || e));
-            return;
-          }
+          });
         }
         rutasLayer.addTo(map);
         rutasVisibles = true;
         btnRutas.textContent = "Rutas (ocultar)";
+        btnRutas.classList.add('btn-yellow');   // <-- amarillo cuando activo
       } else {
         rutasLayer.removeFrom(map);
         rutasVisibles = false;
         btnRutas.textContent = "Rutas";
+        btnRutas.classList.remove('btn-yellow'); // <-- vuelve a normal
       }
     }
 
@@ -337,15 +353,15 @@
       msg.textContent = "";
     }
 
-    // Reset de botón ENVIAR (vuelve a amarillo)
+    // Reset de botón ENVIAR (vuelve a “normal”)
     function resetEnviar() {
-      btnEnviar.classList.remove('success');
+      btnEnviar.classList.remove('btn-green');
     }
     // Cambiar a verde tras éxito
     function markEnviarSuccess() {
-      btnEnviar.classList.add('success');
+      btnEnviar.classList.add('btn-green');
     }
-    // Cuando el usuario edite clave, reset
+    // Cuando el usuario edite clave o mueva el pin/ruta, quitamos verde
     document.getElementById('clave').addEventListener('input', () => { hideMsg(); resetEnviar(); });
 
     // ========================
@@ -394,12 +410,11 @@
         if (!r.ok) {
           const supa = data?.supabase;
           showError(`Error: ${data?.message || r.statusText}` +
-            (supa ? ` | code=${supa.code || ""} | message=${supa.message || ""}` :
-                    ``));
+            (supa ? ` | code=${supa.code || ""} | message=${supa.message || ""}` : ``));
           return;
         }
 
-        // Éxito: palomita y botón verde
+        // Éxito: palomita y botón ENVIAR verde
         showSuccess("Registro guardado");
         markEnviarSuccess();
         document.getElementById("clave").value = "";
@@ -408,7 +423,7 @@
       }
     });
 
-    // Agrega el layer de rutas al mapa al inicio para que el toggle funcione al primer click
+    // Para que el toggle funcione desde el primer click
     rutasLayer.addTo(map);
   </script>
 </body>
