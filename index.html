@@ -26,10 +26,7 @@
     #map { height: 420px; border: 1px solid #ddd; border-radius: 8px; }
     #enviar { width: 100%; margin-top: 14px; padding: 12px; font-size: 16px; }
     #mensaje { margin-top: 10px; min-height: 22px; text-align: center; }
-    /* El input del buscador hereda fuente/tamaño */
-    .leaflet-control-geocoder input {
-      font-size: 14px;
-    }
+    .leaflet-control-geocoder input { font-size: 14px; }
   </style>
 </head>
 <body>
@@ -54,20 +51,40 @@
 
   <script>
     // ========================
-    //  Mapa base
+    // Capas base
     // ========================
-    const map = L.map("map").setView([19.4326, -99.1332], 11); // CDMX
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    const capaMapa = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap contributors"
-    }).addTo(map);
+    });
 
-    // (Opcional) Crédito al geocodificador
-    map.attributionControl.addAttribution('Geocoding © Nominatim');
+    const capaSatelite = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { attribution: "© Esri, Maxar, Earthstar Geographics" }
+    );
 
-    // Marcador único + última selección
+    // Crear mapa con vista inicial CDMX
+    const map = L.map("map", {
+      center: [19.4326, -99.1332],
+      zoom: 11,
+      layers: [capaMapa] // capa inicial
+    });
+
+    // Control de capas
+    const capasBase = {
+      "🗺️ Mapa": capaMapa,
+      "🛰️ Satélite": capaSatelite
+    };
+    L.control.layers(capasBase).addTo(map);
+
+    // Crédito adicional
+    map.attributionControl.addAttribution("Geocoding © Nominatim");
+
+    // ========================
+    // Marcador
+    // ========================
     let marker = null, last = null;
 
-    // Clic para elegir punto
+    // Click en el mapa para colocar marcador
     map.on("click", (e) => {
       last = e.latlng;
       if (marker) marker.setLatLng(last);
@@ -75,9 +92,8 @@
     });
 
     // ========================
-    //  Buscador de lugares
+    // Buscador de lugares
     // ========================
-    // collapsed:false -> visible; countrycodes:'mx' -> filtra México (borra si no quieres filtrar)
     const geocoder = L.Control.geocoder({
       defaultMarkGeocode: false,
       collapsed: false,
@@ -86,25 +102,20 @@
     })
     .on("markgeocode", function (e) {
       const { center, name, bbox } = e.geocode;
-
-      // Enfoca el resultado
       if (bbox) map.fitBounds(bbox);
       else map.flyTo(center, 16);
-
-      // Reubica TU ÚNICO marcador y guarda el punto
       if (marker) marker.setLatLng(center);
       else marker = L.marker(center).addTo(map);
-
       last = center;
       marker.bindPopup(name).openPopup();
     })
     .addTo(map);
 
+    // ========================
+    // Envío de datos
+    // ========================
     const msg = document.getElementById("mensaje");
 
-    // ========================
-    //  Enviar al backend
-    // ========================
     document.getElementById("enviar").addEventListener("click", async () => {
       msg.textContent = "";
 
@@ -133,8 +144,6 @@
 
         msg.textContent = "✅ Registro guardado";
         document.getElementById("clave").value = "";
-        // Si quieres, limpia el marcador:
-        // map.removeLayer(marker); marker = null; last = null;
       } catch (e) {
         msg.textContent = "Error de red: " + (e?.message || e);
       }
