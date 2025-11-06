@@ -4,12 +4,21 @@
   <meta charset="utf-8" />
   <title>Registrar domicilio (latitud/longitud)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Leaflet -->
   <link
     rel="stylesheet"
     href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
     crossorigin=""
   />
+
+  <!-- Leaflet Control Geocoder (buscador) -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css"
+  />
+
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; }
     h1 { font-size: 22px; text-align: center; margin-bottom: 16px; }
@@ -17,6 +26,10 @@
     #map { height: 420px; border: 1px solid #ddd; border-radius: 8px; }
     #enviar { width: 100%; margin-top: 14px; padding: 12px; font-size: 16px; }
     #mensaje { margin-top: 10px; min-height: 22px; text-align: center; }
+    /* El input del buscador hereda fuente/tamaño */
+    .leaflet-control-geocoder input {
+      font-size: 14px;
+    }
   </style>
 </head>
 <body>
@@ -29,28 +42,69 @@
   <button id="enviar">Enviar</button>
   <div id="mensaje"></div>
 
+  <!-- JS de Leaflet -->
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin="">
   </script>
 
+  <!-- JS del buscador -->
+  <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+
   <script>
-    // Mapa
-    const map = L.map("map").setView([19.4326, -99.1332], 10); // CDMX
+    // ========================
+    //  Mapa base
+    // ========================
+    const map = L.map("map").setView([19.4326, -99.1332], 11); // CDMX
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap contributors"
     }).addTo(map);
 
+    // (Opcional) Crédito al geocodificador
+    map.attributionControl.addAttribution('Geocoding © Nominatim');
+
+    // Marcador único + última selección
     let marker = null, last = null;
+
+    // Clic para elegir punto
     map.on("click", (e) => {
       last = e.latlng;
       if (marker) marker.setLatLng(last);
       else marker = L.marker(last).addTo(map);
     });
 
+    // ========================
+    //  Buscador de lugares
+    // ========================
+    // collapsed:false -> visible; countrycodes:'mx' -> filtra México (borra si no quieres filtrar)
+    const geocoder = L.Control.geocoder({
+      defaultMarkGeocode: false,
+      collapsed: false,
+      placeholder: "Buscar lugar...",
+      geocodingQueryParams: { countrycodes: "mx" }
+    })
+    .on("markgeocode", function (e) {
+      const { center, name, bbox } = e.geocode;
+
+      // Enfoca el resultado
+      if (bbox) map.fitBounds(bbox);
+      else map.flyTo(center, 16);
+
+      // Reubica TU ÚNICO marcador y guarda el punto
+      if (marker) marker.setLatLng(center);
+      else marker = L.marker(center).addTo(map);
+
+      last = center;
+      marker.bindPopup(name).openPopup();
+    })
+    .addTo(map);
+
     const msg = document.getElementById("mensaje");
 
+    // ========================
+    //  Enviar al backend
+    // ========================
     document.getElementById("enviar").addEventListener("click", async () => {
       msg.textContent = "";
 
